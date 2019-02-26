@@ -1,5 +1,9 @@
 #import "RNAppAuth.h"
+#if __has_include("<AppAuth/AppAuth.h>")
 #import <AppAuth/AppAuth.h>
+#else
+#import "AppAuth.h"
+#endif
 #import <React/RCTLog.h>
 #import <React/RCTConvert.h>
 #import "RNAppAuthAuthorizationFlowManager.h"
@@ -20,6 +24,14 @@
     return dispatch_get_main_queue();
 }
 
+/*! @brief Number of random bytes generated for the @ state.
+ */
+static NSUInteger const kStateSizeBytes = 32;
+
+/*! @brief Number of random bytes generated for the @ codeVerifier.
+ */
+static NSUInteger const kCodeVerifierBytes = 32;
+
 RCT_EXPORT_MODULE()
 
 RCT_REMAP_METHOD(authorize,
@@ -30,6 +42,8 @@ RCT_REMAP_METHOD(authorize,
                  scopes: (NSArray *) scopes
                  additionalParameters: (NSDictionary *_Nullable) additionalParameters
                  serviceConfiguration: (NSDictionary *_Nullable) serviceConfiguration
+                 useNonce: (BOOL *) useNonce
+                 usePKCE: (BOOL *) usePKCE
                  resolve: (RCTPromiseResolveBlock) resolve
                  reject: (RCTPromiseRejectBlock)  reject)
 {
@@ -41,6 +55,8 @@ RCT_REMAP_METHOD(authorize,
                                 clientId: clientId
                             clientSecret: clientSecret
                                   scopes: scopes
+                                useNonce: useNonce
+                                 usePKCE: usePKCE
                     additionalParameters: additionalParameters
                                  resolve: resolve
                                   reject: reject];
@@ -56,6 +72,8 @@ RCT_REMAP_METHOD(authorize,
                                                                                         clientId: clientId
                                                                                     clientSecret: clientSecret
                                                                                           scopes: scopes
+                                                                                        useNonce: useNonce
+                                                                                         usePKCE: usePKCE
                                                                             additionalParameters: additionalParameters
                                                                                          resolve: resolve
                                                                                           reject: reject];
@@ -126,6 +144,25 @@ RCT_REMAP_METHOD(refresh,
     return configuration;
 }
 
++ (nullable NSString *)generateCodeVerifier {
+  return [OIDTokenUtilities randomURLSafeStringWithSize:kCodeVerifierBytes];
+}
+
++ (nullable NSString *)generateState {
+  return [OIDTokenUtilities randomURLSafeStringWithSize:kStateSizeBytes];
+}
+
++ (nullable NSString *)codeChallengeS256ForVerifier:(NSString *)codeVerifier {
+  if (!codeVerifier) {
+    return nil;
+  }
+  // generates the code_challenge per spec https://tools.ietf.org/html/rfc7636#section-4.2
+  // code_challenge = BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))
+  // NB. the ASCII conversion on the code_verifier entropy was done at time of generation.
+    NSData *sha265Verifier = [OIDTokenUtilities sha265:codeVerifier];
+  return [OIDTokenUtilities encodeBase64urlNoPadding:sha265Verifier];
+}
+
 /*
  * Authorize a user in exchange for a token with provided OIDServiceConfiguration
  */
@@ -134,18 +171,30 @@ RCT_REMAP_METHOD(refresh,
                           clientId: (NSString *) clientId
                       clientSecret: (NSString *) clientSecret
                             scopes: (NSArray *) scopes
+                          useNonce: (BOOL *) useNonce
+                           usePKCE: (BOOL *) usePKCE
               additionalParameters: (NSDictionary *_Nullable) additionalParameters
                            resolve: (RCTPromiseResolveBlock) resolve
                             reject: (RCTPromiseRejectBlock)  reject
 {
+
+    NSString *codeVerifier = usePKCE ? [[self class] generateCodeVerifier] : nil;
+    NSString *codeChallenge = usePKCE ? [[self class] codeChallengeS256ForVerifier:codeVerifier] : nil;
+    NSString *nonce = useNonce ? [[self class] generateState] : nil;
+
     // builds authentication request
     OIDAuthorizationRequest *request =
     [[OIDAuthorizationRequest alloc] initWithConfiguration:configuration
                                                   clientId:clientId
                                               clientSecret:clientSecret
-                                                    scopes:scopes
+                                                     scope:[OIDScopeUtilities scopesWithArray:scopes]
                                                redirectURL:[NSURL URLWithString:redirectUrl]
                                               responseType:OIDResponseTypeCode
+                                                     state:[[self class] generateState]
+                                                     nonce:nonce
+                                              codeVerifier:codeVerifier
+                                             codeChallenge:codeChallenge
+                                      codeChallengeMethod: usePKCE ? OIDOAuthorizationRequestCodeChallengeMethodS256 : nil
                                       additionalParameters:additionalParameters];
     
 
@@ -159,7 +208,7 @@ RCT_REMAP_METHOD(refresh,
     __weak typeof(self) weakSelf = self;
     
     if (additionalParameters[@"skipTokenExchange"] && [additionalParameters[@"skipTokenExchange"] isEqualToString:@"true"]) {
-       _currentSession = [OIDAuthorizationService presentAuthorizationRequest:request presentingViewController:appDelegate.window.rootViewController callback:^(OIDAuthorizationResponse * _Nullable response, NSError * _Nullable error) {
+       _currentSession = [OIDAuthorizationService authStateByPresentingAuthorizationRequest:request presentingViewController:appDelegate.window.rootViewController callback:^(OIDAuthorizationResponse * _Nullable response, NSError * _Nullable error) {
             if (error) {
                reject(@"RNAppAuth Auth Callback Error",[error localizedDescription], error);
            } else {
@@ -172,18 +221,19 @@ RCT_REMAP_METHOD(refresh,
            }
         }];
     } else {
-        _currentSession =
-        [OIDAuthState authStateByPresentingAuthorizationRequest:request
-                                       presentingViewController:appDelegate.window.rootViewController
-                                                       callback:^(OIDAuthState *_Nullable authState,
-                                                                  NSError *_Nullable error) {
-                                                          if (authState) {
-                                                               resolve([self formatResponse:authState.lastTokenResponse]);
-                                                           } else {
-                                                               reject(@"RNAppAuth Error", [error localizedDescription], error);
-                                                           }
-                                                           
-                                                       }]; // end [OIDAuthState authStateByPresentingAuthorizationRequest:request
+        _currentSession = [OIDAuthState authStateByPresentingAuthorizationRequest:request
+                                   presentingViewController:appDelegate.window.rootViewController
+                                                   callback:^(OIDAuthState *_Nullable authState,
+                                                              NSError *_Nullable error) {
+                                                       typeof(self) strongSelf = weakSelf;
+                                                       strongSelf->_currentSession = nil;
+                                                       if (authState) {
+                                                           resolve([self formatResponse:authState.lastTokenResponse
+                                                               withAuthResponse:authState.lastAuthorizationResponse]);
+                                                       } else {
+                                                           reject(@"RNAppAuth Error", [error localizedDescription], error);
+                                                       }
+                                                   }]; // end [OIDAuthState authStateByPresentingAuthorizationRequest:request
     }
 }
 
@@ -241,6 +291,29 @@ RCT_REMAP_METHOD(refresh,
              @"idToken": response.idToken ? response.idToken : @"",
              @"refreshToken": response.refreshToken ? response.refreshToken : @"",
              @"tokenType": response.tokenType ? response.tokenType : @"",
+             };
+}
+
+/*
+ * Take raw OIDTokenResponse and additional paramaeters from an OIDAuthorizationResponse
+ *  and turn them into an extended token response format to pass to JavaScript caller
+ */
+- (NSDictionary*)formatResponse: (OIDTokenResponse*) response
+       withAuthResponse:(OIDAuthorizationResponse*) authResponse {
+    NSDateFormatter *dateFormat = [[NSDateFormatter alloc] init];
+    dateFormat.timeZone = [NSTimeZone timeZoneWithAbbreviation: @"UTC"];
+    [dateFormat setLocale:[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]];
+    [dateFormat setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss'Z'"];
+
+    return @{@"accessToken": response.accessToken ? response.accessToken : @"",
+             @"accessTokenExpirationDate": response.accessTokenExpirationDate ? [dateFormat stringFromDate:response.accessTokenExpirationDate] : @"",
+             @"authorizeAdditionalParameters": authResponse.additionalParameters,
+             @"tokenAdditionalParameters": response.additionalParameters,
+             @"additionalParameters": authResponse.additionalParameters, /* DEPRECATED */
+             @"idToken": response.idToken ? response.idToken : @"",
+             @"refreshToken": response.refreshToken ? response.refreshToken : @"",
+             @"tokenType": response.tokenType ? response.tokenType : @"",
+             @"scopes": authResponse.scope ? [authResponse.scope componentsSeparatedByString:@" "] : [NSArray new],
              };
 }
 
