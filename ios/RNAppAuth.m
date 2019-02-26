@@ -208,7 +208,7 @@ RCT_REMAP_METHOD(refresh,
     __weak typeof(self) weakSelf = self;
     
     if (additionalParameters[@"skipTokenExchange"] && [additionalParameters[@"skipTokenExchange"] isEqualToString:@"true"]) {
-       _currentSession = [OIDAuthorizationService authStateByPresentingAuthorizationRequest:request presentingViewController:appDelegate.window.rootViewController callback:^(OIDAuthorizationResponse * _Nullable response, NSError * _Nullable error) {
+       _currentSession = [OIDAuthorizationService presentAuthorizationRequest:request presentingViewController:appDelegate.window.rootViewController callback:^(OIDAuthorizationResponse * _Nullable response, NSError * _Nullable error) {
             if (error) {
                reject(@"RNAppAuth Auth Callback Error",[error localizedDescription], error);
            } else {
