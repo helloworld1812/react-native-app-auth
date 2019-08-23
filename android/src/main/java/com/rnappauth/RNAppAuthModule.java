@@ -311,6 +311,17 @@ public class RNAppAuthModule extends ReactContextBaseJavaModule implements Activ
                 return;
             }
 
+            if (this.additionalParametersMap.containsKey("skipTokenExchange")
+                    && this.additionalParametersMap.get("skipTokenExchange") != null
+                    && this.additionalParametersMap.get("skipTokenExchange").equals("true")) {
+                WritableMap map = Arguments.createMap();
+                map.putString("code", response.authorizationCode);
+                map.putString("state", response.state);
+                map.putString("redirectUri", response.request.redirectUri.toString());
+                promise.resolve(map);
+                return;
+            }
+
             final Promise authorizePromise = this.promise;
             final AppAuthConfiguration configuration = createAppAuthConfiguration(
                     createConnectionBuilder(this.dangerouslyAllowInsecureHttpRequests, this.tokenRequestHeaders)

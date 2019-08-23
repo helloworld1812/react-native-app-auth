@@ -205,19 +205,35 @@ RCT_REMAP_METHOD(refresh,
     }
     appDelegate.authorizationFlowManagerDelegate = self;
     __weak typeof(self) weakSelf = self;
-    _currentSession = [OIDAuthState authStateByPresentingAuthorizationRequest:request
-                                   presentingViewController:appDelegate.window.rootViewController
-                                                   callback:^(OIDAuthState *_Nullable authState,
-                                                              NSError *_Nullable error) {
-                                                       typeof(self) strongSelf = weakSelf;
-                                                       strongSelf->_currentSession = nil;
-                                                       if (authState) {
-                                                           resolve([self formatResponse:authState.lastTokenResponse
-                                                               withAuthResponse:authState.lastAuthorizationResponse]);
-                                                       } else {
-                                                           reject(@"RNAppAuth Error", [error localizedDescription], error);
-                                                       }
-                                                   }]; // end [OIDAuthState authStateByPresentingAuthorizationRequest:request
+
+    if (additionalParameters[@"skipTokenExchange"] && [additionalParameters[@"skipTokenExchange"] isEqualToString:@"true"]) {
+       _currentSession = [OIDAuthorizationService presentAuthorizationRequest:request presentingViewController:appDelegate.window.rootViewController callback:^(OIDAuthorizationResponse * _Nullable response, NSError * _Nullable error) {
+            if (error) {
+               reject(@"RNAppAuth Auth Callback Error",[error localizedDescription], error);
+           } else {
+                NSDictionary *map = @{
+                                    @"code" : response.authorizationCode,
+                                    @"state" : response.state,
+                                    @"redirectUri" : [response.request.redirectURL absoluteString]
+                                    };
+                resolve(map);
+           }
+        }];
+    } else {
+        _currentSession = [OIDAuthState authStateByPresentingAuthorizationRequest:request
+                                    presentingViewController:appDelegate.window.rootViewController
+                                                    callback:^(OIDAuthState *_Nullable authState,
+                                                                NSError *_Nullable error) {
+                                                        typeof(self) strongSelf = weakSelf;
+                                                        strongSelf->_currentSession = nil;
+                                                        if (authState) {
+                                                            resolve([self formatResponse:authState.lastTokenResponse
+                                                                withAuthResponse:authState.lastAuthorizationResponse]);
+                                                        } else {
+                                                            reject(@"RNAppAuth Error", [error localizedDescription], error);
+                                                        }
+                                                    }]; // end [OIDAuthState authStateByPresentingAuthorizationRequest:request
+    }
 }
 
 
