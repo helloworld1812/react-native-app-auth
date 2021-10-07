@@ -291,7 +291,8 @@ public class RNAppAuthModule extends ReactContextBaseJavaModule implements Activ
         if (scopesString != null) {
             authRequestBuilder.setScope(scopesString);
         }
-
+        
+        authRequestBuilder.setCodeVerifier(null);
 
         if (additionalParametersMap != null) {
             // handle additional parameters separately to avoid exceptions from AppAuth
